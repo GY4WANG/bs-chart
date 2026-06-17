@@ -20,28 +20,26 @@ const bsSdk = new BsSdk({
   onSelectionChange: true,
   immediatelySelectionChange: true,
 });
-
 const orm = new BsORM(bsSdk);
 
 export default function Home() {
   const [t, i18n] = useTranslation();
-  const echartRef = useRef();
+  const echartRef = useRef<any>();
   const [conf, setConf] = useKeepState<any>({
     output: { type: "preview" },
     chartType: "line",
     chart: { max: 10, min: 0, order: "default", auto: true, showValue: true },
+    baseline: { enabled: false, type: "fixed", value: 0, field: "" },
     format: true,
     formatCode: {},
   });
   const [option, setOption] = useState<any>(
     createOption(
       "line",
-      {
-        A: 10,
-        B: 0,
-        C: 10,
-      },
-      conf?.chart
+      { A: 10, B: 0, C: 10 },
+      conf?.chart,
+      conf?.baseline,
+      undefined
     )
   );
 
@@ -65,10 +63,7 @@ export default function Home() {
               optionList={[
                 { label: t("chart-conf-default"), value: "default" },
                 { label: t("chart-conf-asc"), value: "asc" },
-                {
-                  label: t("chart-conf-desc"),
-                  value: "desc",
-                },
+                { label: t("chart-conf-desc"), value: "desc" },
               ]}
             ></Form.Select>
           </>
@@ -84,16 +79,18 @@ export default function Home() {
               optionList={[
                 { label: t("chart-conf-default"), value: "default" },
                 { label: t("chart-conf-asc"), value: "asc" },
-                {
-                  label: t("chart-conf-desc"),
-                  value: "desc",
-                },
+                { label: t("chart-conf-desc"), value: "desc" },
               ]}
             ></Form.Select>
+            <Form.Switch
+              field="chart.showValue"
+              label={t("chart-conf-showValue")}
+              defaultValue={conf.chart.showValue}
+              initValue={conf.chart.showValue}
+            ></Form.Switch>
           </>
         );
       },
-
       get radar() {
         return (
           <>
@@ -128,36 +125,19 @@ export default function Home() {
         );
       },
     };
-
     return map[conf.chartType] || null;
   };
 
-  // console.log(conf);
-
   useEffect(() => {
-    // const clear = bsSdk.selectionChangeEmitter.on(async (e) => {
-    //   const { record, field } = await bsSdk.getSelectionQuery(e.data);
-    //   console.log("record", record);
-    //   console.log("field", field);
-    //   console.log(e);
-    // });
-    // return clear;
-    console.log("useEffect");
-    bsSdk.bitable.bridge.getLanguage().then((lang) => {
+    bsSdk.bitable.bridge.getLanguage().then((lang: string) => {
       i18n.changeLanguage(lang.includes("zh") ? "zh" : "en");
     });
   }, []);
 
   const onSubmit = useCallback(
     async (nconf: any) => {
-      console.log(
-        nconf,
-        echartRef
-        // downloadFile(base64ToFile(url, Date.now() + ".png", "image/png"))
-      );
       conf.select = nconf.select;
       nconf = mergeDeep(conf, nconf);
-
       if (nconf.chart.isExpr) {
         nconf.chart.expr = nconf.chart.expr || {};
         for (let i = 0; i < nconf.select.length; i++) {
@@ -171,27 +151,26 @@ export default function Home() {
       }
       if (Object.keys(nconf?.select || {}).length === 0)
         return Toast.error(t("toast-select-number-field"));
+
       let load = Toast.info({
         icon: <Spin />,
         content: `${t("toast-gening")}...`,
         duration: 0,
       });
+
       let recordId = "";
       if (nconf.output.type !== "multiToField") {
         const select = await bsSdk.getSelection();
-        console.log({ select });
-
         if (select.recordId) {
           recordId = select.recordId as string;
         } else {
           if (nconf?.output?.type === "preview") {
             recordId = await (await bsSdk.getActiveTable())
               .getRecords({ pageSize: 1 })
-              .then((res) => res.records[0].recordId);
+              .then((res: any) => res.records[0].recordId);
           }
         }
       }
-      console.log({ recordId });
 
       if (nconf.output.type === "multiToField") {
         const recordIds = await bsSdk.getRecordIds();
@@ -223,9 +202,7 @@ export default function Home() {
           Toast.close(load);
           return Toast.error(t("toast-select-record"));
         }
-
         const url = await gene(recordId);
-
         const outfield = orm.getFieldsMap().get(nconf.output.field);
         if ((await outfield?.getType()) !== FieldType.Attachment) {
           Toast.close(load);
@@ -252,12 +229,8 @@ export default function Home() {
         const selectFieldRecord = nconf.select.reduce(
           (map: any, fieldId: string) => {
             let v = toDisplay(record[fieldId]);
-            if (!v) {
-              v = 0;
-            }
+            if (!v) v = 0;
             v = Number(v);
-            // console.log("select", v, fieldId, record[fieldId]);
-
             if (typeof v === "number" && v === v) {
               map[orm.getFieldsMap()?.get(fieldId)?.name as string] = nconf
                 .chart?.expr?.[fieldId]
@@ -268,9 +241,17 @@ export default function Home() {
           },
           {}
         );
+        if (Object.keys(selectFieldRecord).length === 0) return;
 
-        if (Object.keys(selectFieldRecord).length === 0) {
-          return;
+        // 计算基准线值
+        let baselineValue: number | undefined;
+        if (nconf.baseline?.enabled) {
+          if (nconf.baseline.type === "fixed") {
+            baselineValue = Number(nconf.baseline.value) || 0;
+          } else if (nconf.baseline.type === "field" && nconf.baseline.field) {
+            const bv = toDisplay(record[nconf.baseline.field]);
+            baselineValue = Number(bv) || 0;
+          }
         }
 
         setOption(
@@ -278,16 +259,11 @@ export default function Home() {
             nconf.chartType,
             selectFieldRecord,
             nconf?.chart,
+            nconf?.baseline,
+            baselineValue,
             toDisplay(record[nconf.selectLabel])
           )
         );
-        console.log(
-          record,
-          selectFieldRecord,
-          nconf.selectLabel,
-          record[nconf.selectLabel]
-        );
-
         await new Promise((resolve) => setTimeout(resolve, 1));
         const url = (echartRef.current as any)?.getDataURL();
         return url;
@@ -298,7 +274,6 @@ export default function Home() {
 
   const onChange = useCallback(
     (e: any) => {
-      // console.log("onChange", e);
       setConfValue(e.values);
     },
     [setConfValue]
@@ -308,32 +283,54 @@ export default function Home() {
     chartType: string,
     data: any,
     opt: any = {},
+    baselineConf: any = {},
+    baselineValue?: number,
     label?: any
   ) {
-    console.log("createOption", chartType, data, opt, label);
-
     let keys = Object.keys(data);
     const maxKeyLen = Math.max(...keys.map((key) => key.length));
     if (opt.order === "asc" || opt.order === "desc") {
       keys = extractAndSortNumbers(keys);
-      if (opt.order === "desc") {
-        keys = keys.reverse();
-      }
+      if (opt.order === "desc") keys = keys.reverse();
     }
     if (opt.auto && keys.length) {
       opt.max = Math.max(...keys.map((key) => data[key]));
       opt.min = 0;
     }
+
+    const values = keys.map((key) => data[key]);
+
     return (
       (
         {
           get line() {
+            const seriesData = keys.map((key) => data[key]);
+            const markLineData: any[] = [];
+            if (baselineConf?.enabled && baselineValue !== undefined) {
+              markLineData.push({
+                yAxis: baselineValue,
+                name: "基准线",
+                label: {
+                  formatter: "基准: {c}",
+                  position: "insideEndTop",
+                },
+                lineStyle: {
+                  color: "#ff4d4f",
+                  type: "dashed",
+                  width: 2,
+                },
+              });
+            }
+
             return {
               wrapStyle: {
                 width: `${(keys.length ?? 0) * 100 + 100}px`,
                 height: `500px`,
               },
               animation: false,
+              tooltip: {
+                trigger: "axis",
+              },
               xAxis: {
                 type: "category",
                 data: keys,
@@ -343,8 +340,20 @@ export default function Home() {
               },
               series: [
                 {
-                  data: keys.map((key) => data[key]),
+                  data: seriesData,
                   type: "line",
+                  label: {
+                    show: opt.showValue !== false,
+                    position: "top",
+                    formatter: "{c}",
+                  },
+                  markLine:
+                    markLineData.length > 0
+                      ? {
+                          data: markLineData,
+                          symbol: ["none", "none"],
+                        }
+                      : undefined,
                 },
               ],
             };
@@ -355,7 +364,6 @@ export default function Home() {
                 width: `${(keys.length ?? 0) * 100 + 100}px`,
                 height: `500px`,
               },
-
               animation: false,
               xAxis: {
                 type: "category",
@@ -379,44 +387,25 @@ export default function Home() {
                 width: `500px`,
                 height: `500px`,
               },
-
               backgroundColor: "#fff",
-
               animation: false,
-              // title: {
-              //   text: label,
-              //   textAlign: "center",
-              // },
-              legend: {
-                // data: ["Allocated Budget", "Actual Spending"],
-              },
+              legend: {},
               textStyle: {
                 fontSize: 16,
               },
               radar: {
-                // shape: 'circle',
-                // indicator: [
-                //   { name: "Sales" },
-                //   { name: "Administration" },
-                //   { name: "Information Technology" },
-                //   { name: "Customer Support" },
-                //   { name: "Development" },
-                //   { name: "Marketing" },
-                // ],
                 indicator: keys.map((key) => ({
                   name: key,
                   max: data[key] > opt.max ? data[key] : opt.max,
                   min: opt.min,
                   color: data[key] > opt.max ? "red" : undefined,
-                  // key.length > 6
-                  //   ? key.slice(0, 6) + "\n" + key.slice(6, key.length)
-                  //   : key,
                 })),
                 axisName: {
                   color: "#5470c6",
                 },
-                center: ["50%", "50%"], // 将雷达图居中显示
-                radius: maxKeyLen > 5 ? "50%" : maxKeyLen > 4 ? "60%" : "70%", // 设置雷达图的半径为容器高度的70%
+                center: ["50%", "50%"],
+                radius:
+                  maxKeyLen > 5 ? "50%" : maxKeyLen > 4 ? "60%" : "70%",
               },
               series: [
                 {
@@ -434,14 +423,6 @@ export default function Home() {
                       },
                       name: label,
                     },
-                    // {
-                    //   value: [4200, 3000, 20000, 35000, 50000, 18000],
-                    //   name: "Allocated Budget",
-                    // },
-                    // {
-                    //   value: [5000, 14000, 28000, 26000, 42000, 21000],
-                    //   name: "Actual Spending",
-                    // },
                   ],
                 },
               ],
@@ -475,7 +456,7 @@ export default function Home() {
             field="selectLabel"
             label={t("label-field")}
             placeholder={t("select-field-any-tip")}
-            filterOption={(field) => field?.type !== FieldType.Number}
+            filterOption={(field: any) => field?.type !== FieldType.Number}
             otherOptions={[
               {
                 id: "none",
@@ -484,6 +465,7 @@ export default function Home() {
             ]}
           ></BSelectField>
         </Section>
+
         <Section text={t("chart-conf")} style={{ marginTop: "10px" }}>
           <Form.Select
             field="chartType"
@@ -494,9 +476,7 @@ export default function Home() {
               { label: t("chart-conf-radar"), value: "radar" },
             ]}
             onChange={(v: any) => {
-              console.log(v);
               setConfValue({ chartType: v });
-              // setOption(createOption(v, , opt))
             }}
           ></Form.Select>
           <Form.Switch
@@ -517,6 +497,49 @@ export default function Home() {
             ))}
           {uiConf()}
         </Section>
+
+        {/* 新增：基准线配置 */}
+        <Section text={"基准线配置"} style={{ marginTop: "10px" }}>
+          <Form.Switch
+            field="baseline.enabled"
+            label={"启用基准线"}
+            defaultValue={conf.baseline.enabled}
+            initValue={conf.baseline.enabled}
+            onChange={(v) => setConfValue({ baseline: { enabled: v } })}
+          ></Form.Switch>
+          {conf.baseline?.enabled && (
+            <>
+              <Form.RadioGroup
+                field="baseline.type"
+                label={"基准线来源"}
+                type="button"
+                defaultValue={conf.baseline.type}
+                initValue={conf.baseline.type}
+                onChange={(v) => setConfValue({ baseline: { type: v } })}
+              >
+                <Form.Radio value="fixed">固定数值</Form.Radio>
+                <Form.Radio value="field">数据表字段</Form.Radio>
+              </Form.RadioGroup>
+              {conf.baseline?.type === "fixed" ? (
+                <Form.InputNumber
+                  field="baseline.value"
+                  label={"基准值"}
+                  placeholder="请输入预期数值"
+                  defaultValue={conf.baseline.value}
+                  initValue={conf.baseline.value}
+                ></Form.InputNumber>
+              ) : (
+                <BSelectField
+                  field="baseline.field"
+                  label={"基准字段"}
+                  placeholder={"请选择包含预期值的字段"}
+                  filterOption={(field: any) => field?.type === FieldType.Number}
+                ></BSelectField>
+              )}
+            </>
+          )}
+        </Section>
+
         <Section text={t("output-conf")} style={{ marginTop: "10px" }}>
           <Form.Select field="output.type" label={t("output-type")}>
             <Form.Select.Option value={"preview"}>
@@ -533,7 +556,7 @@ export default function Home() {
             <>
               <BSelectField
                 field="output.field"
-                filterOption={(field) => field?.type === FieldType.Attachment}
+                filterOption={(field: any) => field?.type === FieldType.Attachment}
                 label={t("output-field")}
                 placeholder={t("output-field-tip")}
               ></BSelectField>
@@ -545,6 +568,7 @@ export default function Home() {
             </>
           )}
         </Section>
+
         <Space>
           <Button htmlType="submit" block type="primary">
             {t("btn-gene")}
@@ -557,6 +581,7 @@ export default function Home() {
             {t("btn-help")}
           </Button>
         </Space>
+
         <div style={{ width: "100%", overflow: "scroll" }}>
           <div style={option.wrapStyle}>
             <ECharts refInstance={echartRef} option={option}></ECharts>
@@ -578,36 +603,17 @@ function toDisplay(cell: any) {
 }
 
 function extractAndSortNumbers(strings: any[]) {
-  // 定义中文数字映射
   const chineseNumberMap: any = {
-    零: 0,
-    一: 1,
-    二: 2,
-    三: 3,
-    四: 4,
-    五: 5,
-    六: 6,
-    七: 7,
-    八: 8,
-    九: 9,
-    十: 10,
-    百: 100,
-    千: 1000,
-    万: 10000,
-    亿: 100000000,
+    零: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5,
+    六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
+    百: 100, 千: 1000, 万: 10000, 亿: 100000000,
   };
-
-  // 中文数字转阿拉伯数字
   function chineseToNumber(chineseStr: string) {
-    let total = 0;
-    let temp = 0;
-    let prevUnit = 1;
-
+    let total = 0, temp = 0, prevUnit = 1;
     for (const char of chineseStr.split("")) {
       let value = chineseNumberMap[char];
-      if (value < 10) {
-        temp = value;
-      } else {
+      if (value < 10) temp = value;
+      else {
         if (temp === 0) temp = 1;
         if (value > prevUnit) {
           total += temp;
@@ -622,42 +628,27 @@ function extractAndSortNumbers(strings: any[]) {
     }
     return total + temp;
   }
-
-  // 提取数字并映射为数字值的函数
   function extractNumber(str: string) {
     const numberPattern = /(\d+|[零一二三四五六七八九十百千万亿]+)/g;
     const matches = str.match(numberPattern);
     if (!matches) return 0;
-
     return matches.reduce((sum: number, match: string) => {
-      return (
-        sum + (isNaN(Number(match)) ? chineseToNumber(match) : Number(match))
-      );
+      return sum + (isNaN(Number(match)) ? chineseToNumber(match) : Number(match));
     }, 0);
   }
-
-  // 排序函数，将包含数字的词进行排序
   function sortWithNumbers(a: any, b: any) {
-    const numA = extractNumber(a);
-    const numB = extractNumber(b);
-    return numA - numB;
+    return extractNumber(a) - extractNumber(b);
   }
-
-  // 使用排序函数对字符串数组进行排序
   return strings.slice().sort(sortWithNumbers);
 }
 
 function mergeDeep(a: any, b: any) {
   const keys = Object.keys(b);
-  const len = keys.length;
-  for (let i = 0; i < len; i++) {
+  for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     if (typeof b[key] === "object") {
-      if (typeof a[key] === "object") {
-        mergeDeep(a[key], b[key]);
-      } else {
-        a[key] = b[key];
-      }
+      if (typeof a[key] === "object") mergeDeep(a[key], b[key]);
+      else a[key] = b[key];
     } else {
       a[key] = b[key];
     }
@@ -666,7 +657,6 @@ function mergeDeep(a: any, b: any) {
 }
 
 function parseExpr(expr: string, ctx: any, cb: any) {
-  // 运行expr
   try {
     return new Function("ctx", `with(ctx){return ${expr}}`)(ctx);
   } catch (error) {
